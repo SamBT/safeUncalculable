@@ -1,0 +1,5 @@
+**/.ipynb_checkpoints/
+**/*.pdf
+**/__pycache__/
+**/*.h5
+**/*.root
