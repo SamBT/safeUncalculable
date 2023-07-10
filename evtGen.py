@@ -1,13 +1,14 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import pythia8
 import time
 import vector
 import fastjet as fj
 import awkward as ak
 import h5py
+import gc
 
-def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
+def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
+    print('starting?')
     pythia = pythia8.Pythia()
 
     # Initialize settings from q/g project
@@ -28,23 +29,29 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
     pythia.readString("25:onMode = off")
     
     if jet_type == 'q':
+        print("decaying to qqbar (1)")
         pythia.readString("25:onIfAny = 1")
     elif jet_type == 'g':
+        print("decaying to gluon (21)")
         pythia.readString("25:onIfAny = 21")
+        print("set gluon")
     else:
         print("Invalid jet type!")
         return
 
     pythia.readString("Random:setSeed = on")
     pythia.readString("Random:Seed = 0")
+    print("done settings")
 
     pythia.init()
+    print("pythia initialized")
     
     # generate the events
     nev_gen = 0
     finals = []
     partons = []
     t1 = time.time()
+    #pbar = tqdm(range(nEvents))
     while nev_gen < nEvents:
         if not pythia.next(): continue
         nev_gen += 1
@@ -58,7 +65,8 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
                 finals[-1].append(pdict)
             if p.isFinalPartonLevel():
                 partons[-1].append(pdict)
-
+        #pbar.update(nev_gen)
+        #pbar.refresh()
     finals = ak.Array(finals)
     partons = ak.Array(partons)
 
@@ -87,8 +95,14 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
     jet_constits = jet_constits[mk]
     pjets = pjets[mk]
     pjet_constits = pjet_constits[mk]
+    mk2 = (jets.pt[:,0] >= 400) & (jets.pt[:,0] <= 500)
+    jets = jets[mk2]
+    jet_constits = jet_constits[mk2]
+    pjets = pjets[mk2]
+    pjet_constits = pjet_constits[mk2]
 
     del finals, partons
+    gc.collect()
 
     t2 = time.time()
     print("Took {0:.3f} seconds to generate {1} events".format(t2-t1,nev_gen))
@@ -112,25 +126,33 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
     theta = lead_jet_constits.deltaangle(lead_jets)
     dR = lead_jet_constits.deltaR(lead_jets)
     z = lead_jet_constits.pt / lead_jets.pt
-    jmax = ak.max(ak.count(z,axis=1))
+    z_e = lead_jet_constits.E / lead_jets.E
 
     pdeta = lead_pjet_constits.deltaeta(lead_pjets)
     pdphi = lead_pjet_constits.deltaphi(lead_pjets)
     ptheta = lead_pjet_constits.deltaangle(lead_pjets)
     pdR = lead_pjet_constits.deltaR(lead_pjets)
     pz = lead_pjet_constits.pt / lead_pjets.pt
-    pjmax = ak.max(ak.count(pz,axis=1))
+    pz_e = lead_pjet_constits.E / lead_pjets.E
+    
+    jmax = 300 # max number of constituents to save
+    
+    print(f"Asked for {nEvents} events, yielded {len(lead_jets)}")
     
     # write h5
-    outfile = outfile_base + "_R{0:.1f}_mH{1}.h5".format(R,mH)
+    outDir = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/"
+    outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}.h5".format(R,mH)
     with h5py.File(outfile,"w") as f:
         f.create_dataset("jet1_pt",data=np.array(lead_jets.pt))
         f.create_dataset("jet1_eta",data=np.array(lead_jets.eta))
         f.create_dataset("jet1_phi",data=np.array(lead_jets.phi))
         f.create_dataset("jet1_e",data=np.array(lead_jets.e))
         f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1),0).to_numpy())
+        f.create_dataset("jet1_constit_ez",data=ak.fill_none(ak.pad_none(z_e,jmax,axis=1),0).to_numpy())
+        f.create_dataset("jet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_jet_constits.pt,jmax,axis=1),0).to_numpy())
         f.create_dataset("jet1_constit_eta",data=ak.fill_none(ak.pad_none(deta,jmax,axis=1),0).to_numpy())
         f.create_dataset("jet1_constit_phi",data=ak.fill_none(ak.pad_none(dphi,jmax,axis=1),0).to_numpy())
+        f.create_dataset("jet1_constit_E",data=ak.fill_none(ak.pad_none(lead_jet_constits.E,jmax,axis=1),0).to_numpy())
         f.create_dataset("jet1_constit_theta",data=ak.fill_none(ak.pad_none(theta,jmax,axis=1),0).to_numpy())
         f.create_dataset("jet1_constit_dR",data=ak.fill_none(ak.pad_none(dR,jmax,axis=1),0).to_numpy())
 
@@ -139,10 +161,18 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0):
         f.create_dataset("pjet1_phi",data=np.array(lead_pjets.phi))
         f.create_dataset("pjet1_e",data=np.array(lead_pjets.e))
         f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1),0).to_numpy())
+        f.create_dataset("pjet1_constit_ez",data=ak.fill_none(ak.pad_none(pz_e,jmax,axis=1),0).to_numpy())
+        f.create_dataset("pjet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_pjet_constits.pt,jmax,axis=1),0).to_numpy())
         f.create_dataset("pjet1_constit_eta",data=ak.fill_none(ak.pad_none(pdeta,jmax,axis=1),0).to_numpy())
         f.create_dataset("pjet1_constit_phi",data=ak.fill_none(ak.pad_none(pdphi,jmax,axis=1),0).to_numpy())
         f.create_dataset("pjet1_constit_theta",data=ak.fill_none(ak.pad_none(ptheta,jmax,axis=1),0).to_numpy())
         f.create_dataset("pjet1_constit_dR",data=ak.fill_none(ak.pad_none(pdR,jmax,axis=1),0).to_numpy())
+    
+    del dR_mask, jets_sort, pjet_sort, mk, mk2
+    del jets,lead_jets,z,z_e,deta,dphi,theta,dR
+    del pjets,lead_pjets,pz,pz_e,pdeta,pdphi,ptheta,pdR
+    del pythia
+    gc.collect()
 
         
 def softdrop(jet, zcut=0.1, beta=0, R=0.8):
