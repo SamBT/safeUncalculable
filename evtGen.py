@@ -7,9 +7,10 @@ import awkward as ak
 import h5py
 import gc
 
-def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
+def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=None):
     print('starting?')
     pythia = pythia8.Pythia()
+    assert (ptCut is None) or (type(ptCut==list) and len(ptCut) == 2 and ptCut[0] < ptCut[1])
 
     # Initialize settings from q/g project
     pythia.readString("PartonShowers:model = 1") # default showers here
@@ -53,7 +54,8 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
     t1 = time.time()
     #pbar = tqdm(range(nEvents))
     while nev_gen < nEvents:
-        if not pythia.next(): continue
+        if not pythia.next():
+            continue
         nev_gen += 1
         if nev_gen % 1000 == 0:
             print('generated {0} events'.format(nev_gen))
@@ -95,7 +97,10 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
     jet_constits = jet_constits[mk]
     pjets = pjets[mk]
     pjet_constits = pjet_constits[mk]
-    mk2 = (jets.pt[:,0] >= 400) & (jets.pt[:,0] <= 500)
+    if ptCut is None:
+        mk2 = jets.pt[:,0] > 0
+    else:
+        mk2 = (jets.pt[:,0] > ptCut[0]) & (jets.pt[:,0] < ptCut[1])
     jets = jets[mk2]
     jet_constits = jet_constits[mk2]
     pjets = pjets[mk2]
@@ -110,16 +115,20 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
     # get leading jet info 
     lead_jets = jets[:,0]
     lead_jet_constits = jet_constits[:,0]
-    lead_pjets = pjets[:,0]
-    lead_pjet_constits = pjet_constits[:,0]
-
-    dR_mask = lead_jets.deltaR(lead_pjets) < 0.1
-
-    lead_jets = lead_jets[dR_mask]
-    lead_jet_constits = lead_jet_constits[dR_mask]
-
-    lead_pjets = lead_pjets[dR_mask]
-    lead_pjet_constits = lead_pjet_constits[dR_mask]
+    # compute nearest dR to pjet
+    dR_toPjets = lead_jets.deltaR(pjets)
+    closest_pjet_mask = ak.argmin(dR_toPjets,axis=1,keepdims=True)
+    closest_pjets = pjets[closest_pjet_mask][:,0]
+    closest_pjet_constits = pjet_constits[closest_pjet_mask][:,0]
+    # define match as dR < 0.1
+    matched_pjet_mask = ak.min(dR_toPjets,axis=1) < 0.1
+    # select only events with match
+    lead_jets = lead_jets[matched_pjet_mask]
+    lead_jet_constits = lead_jet_constits[matched_pjet_mask]
+    match_pjets = closest_pjets[matched_pjet_mask]
+    match_pjet_constits = closest_pjet_constits[matched_pjet_mask]
+    
+    print(f"There are {ak.count_nonzero(~matched_pjet_mask)} events where the leading had jet matches 0 parton jets")
     
     deta = lead_jet_constits.deltaeta(lead_jets)
     dphi = lead_jet_constits.deltaphi(lead_jets)
@@ -128,49 +137,50 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=0.8,ptMin=20.0):
     z = lead_jet_constits.pt / lead_jets.pt
     z_e = lead_jet_constits.E / lead_jets.E
 
-    pdeta = lead_pjet_constits.deltaeta(lead_pjets)
-    pdphi = lead_pjet_constits.deltaphi(lead_pjets)
-    ptheta = lead_pjet_constits.deltaangle(lead_pjets)
-    pdR = lead_pjet_constits.deltaR(lead_pjets)
-    pz = lead_pjet_constits.pt / lead_pjets.pt
-    pz_e = lead_pjet_constits.E / lead_pjets.E
+    pdeta = match_pjet_constits.deltaeta(match_pjets)
+    pdphi = match_pjet_constits.deltaphi(match_pjets)
+    ptheta = match_pjet_constits.deltaangle(match_pjets)
+    pdR = match_pjet_constits.deltaR(match_pjets)
+    pz = match_pjet_constits.pt / match_pjets.pt
+    pz_e = match_pjet_constits.E / match_pjets.E
     
-    jmax = 300 # max number of constituents to save
+    jmax = 150 # max number of constituents to save
     
     print(f"Asked for {nEvents} events, yielded {len(lead_jets)}")
     
     # write h5
-    outDir = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/"
-    outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}.h5".format(R,mH)
+    outDir = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/"
+    ptCutString = f"pT{ptCut[0]}to{ptCut[1]}" if ptCut is not None else "pTall"
+    outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}_{2}.h5".format(R,mH,ptCutString)
     with h5py.File(outfile,"w") as f:
         f.create_dataset("jet1_pt",data=np.array(lead_jets.pt))
         f.create_dataset("jet1_eta",data=np.array(lead_jets.eta))
         f.create_dataset("jet1_phi",data=np.array(lead_jets.phi))
         f.create_dataset("jet1_e",data=np.array(lead_jets.e))
-        f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_ez",data=ak.fill_none(ak.pad_none(z_e,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_jet_constits.pt,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_eta",data=ak.fill_none(ak.pad_none(deta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_phi",data=ak.fill_none(ak.pad_none(dphi,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_E",data=ak.fill_none(ak.pad_none(lead_jet_constits.E,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_theta",data=ak.fill_none(ak.pad_none(theta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_dR",data=ak.fill_none(ak.pad_none(dR,jmax,axis=1),0).to_numpy())
+        f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_ez",data=ak.fill_none(ak.pad_none(z_e,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_jet_constits.pt,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_eta",data=ak.fill_none(ak.pad_none(deta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_phi",data=ak.fill_none(ak.pad_none(dphi,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_E",data=ak.fill_none(ak.pad_none(lead_jet_constits.E,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_theta",data=ak.fill_none(ak.pad_none(theta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_dR",data=ak.fill_none(ak.pad_none(dR,jmax,axis=1,clip=True),0).to_numpy())
 
-        f.create_dataset("pjet1_pt",data=np.array(lead_pjets.pt))
-        f.create_dataset("pjet1_eta",data=np.array(lead_pjets.eta))
-        f.create_dataset("pjet1_phi",data=np.array(lead_pjets.phi))
-        f.create_dataset("pjet1_e",data=np.array(lead_pjets.e))
-        f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_ez",data=ak.fill_none(ak.pad_none(pz_e,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_pjet_constits.pt,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_eta",data=ak.fill_none(ak.pad_none(pdeta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_phi",data=ak.fill_none(ak.pad_none(pdphi,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_theta",data=ak.fill_none(ak.pad_none(ptheta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_dR",data=ak.fill_none(ak.pad_none(pdR,jmax,axis=1),0).to_numpy())
+        f.create_dataset("pjet1_pt",data=np.array(match_pjets.pt))
+        f.create_dataset("pjet1_eta",data=np.array(match_pjets.eta))
+        f.create_dataset("pjet1_phi",data=np.array(match_pjets.phi))
+        f.create_dataset("pjet1_e",data=np.array(match_pjets.e))
+        f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_ez",data=ak.fill_none(ak.pad_none(pz_e,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_pt",data=ak.fill_none(ak.pad_none(match_pjet_constits.pt,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_eta",data=ak.fill_none(ak.pad_none(pdeta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_phi",data=ak.fill_none(ak.pad_none(pdphi,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_theta",data=ak.fill_none(ak.pad_none(ptheta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_dR",data=ak.fill_none(ak.pad_none(pdR,jmax,axis=1,clip=True),0).to_numpy())
     
-    del dR_mask, jets_sort, pjet_sort, mk, mk2
+    del closest_pjet_mask, matched_pjet_mask, jets_sort, pjet_sort, mk, mk2
     del jets,lead_jets,z,z_e,deta,dphi,theta,dR
-    del pjets,lead_pjets,pz,pz_e,pdeta,pdphi,ptheta,pdR
+    del pjets,match_pjets,pz,pz_e,pdeta,pdphi,ptheta,pdR
     del pythia
     gc.collect()
 
@@ -342,11 +352,11 @@ def generate_eeH_withSD(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0,dR
         f.create_dataset("jet1_eta",data=np.array(jets.eta))
         f.create_dataset("jet1_phi",data=np.array(jets.phi))
         f.create_dataset("jet1_e",data=np.array(jets.e))
-        f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_eta",data=ak.fill_none(ak.pad_none(deta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_phi",data=ak.fill_none(ak.pad_none(dphi,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_theta",data=ak.fill_none(ak.pad_none(theta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("jet1_constit_dR",data=ak.fill_none(ak.pad_none(dR,jmax,axis=1),0).to_numpy())
+        f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_eta",data=ak.fill_none(ak.pad_none(deta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_phi",data=ak.fill_none(ak.pad_none(dphi,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_theta",data=ak.fill_none(ak.pad_none(theta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("jet1_constit_dR",data=ak.fill_none(ak.pad_none(dR,jmax,axis=1,clip=True),0).to_numpy())
         
         f.create_dataset("jet1_sd_pt",data=np.array(jets_sd.pt))
         f.create_dataset("jet1_sd_eta",data=np.array(jets_sd.eta))
@@ -362,11 +372,11 @@ def generate_eeH_withSD(jet_type,nEvents,outfile_base,mH=500,R=0.8,ptMin=20.0,dR
         f.create_dataset("pjet1_eta",data=np.array(pjets.eta))
         f.create_dataset("pjet1_phi",data=np.array(pjets.phi))
         f.create_dataset("pjet1_e",data=np.array(pjets.e))
-        f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_eta",data=ak.fill_none(ak.pad_none(pdeta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_phi",data=ak.fill_none(ak.pad_none(pdphi,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_theta",data=ak.fill_none(ak.pad_none(ptheta,jmax,axis=1),0).to_numpy())
-        f.create_dataset("pjet1_constit_dR",data=ak.fill_none(ak.pad_none(pdR,jmax,axis=1),0).to_numpy())
+        f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_eta",data=ak.fill_none(ak.pad_none(pdeta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_phi",data=ak.fill_none(ak.pad_none(pdphi,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_theta",data=ak.fill_none(ak.pad_none(ptheta,jmax,axis=1,clip=True),0).to_numpy())
+        f.create_dataset("pjet1_constit_dR",data=ak.fill_none(ak.pad_none(pdR,jmax,axis=1,clip=True),0).to_numpy())
         
         f.create_dataset("pjet1_sd_pt",data=np.array(pjets_sd.pt))
         f.create_dataset("pjet1_sd_eta",data=np.array(pjets_sd.eta))

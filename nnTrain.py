@@ -11,8 +11,7 @@ from tensorflow.keras.losses import BinaryCrossentropy
 from multiprocessing import Process
 import os
 
-def get_data(jtype,hlevel=True,efrac=False):
-    base = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/"
+def get_data(jtype,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
     gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
     qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
@@ -37,10 +36,9 @@ def get_data(jtype,hlevel=True,efrac=False):
         
     output = np.concatenate((z[:,:,np.newaxis],eta[:,:,np.newaxis],phi[:,:,np.newaxis]),axis=-1)
     del z,eta,phi
-    return output
+    return output[:nmax]
 
-def get_vars(jtype,vars,hlevel=True,efrac=False):
-    base = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/"
+def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
     gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
     qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
@@ -56,10 +54,9 @@ def get_vars(jtype,vars,hlevel=True,efrac=False):
                     output[i].append(f[f"pjet1_{v}"][()])
     output = np.concatenate([np.concatenate(k,axis=0).reshape(-1,1) for k in output],axis=-1)
         
-    return output
+    return output[:nmax]
 
-def get_constit_vars(jtype,vars,hlevel=True,efrac=False):
-    base = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/"
+def get_constit_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
     gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
     qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
@@ -74,7 +71,7 @@ def get_constit_vars(jtype,vars,hlevel=True,efrac=False):
                 for i,v in enumerate(vars):
                     output[i].append(f[f"pjet1_constit_{v}"][()])
     output = np.concatenate([np.concatenate(k,axis=0)[:,:,np.newaxis] for k in output],axis=-1)
-    return output
+    return output[:nmax]
 
 def get_data_softDrop(file):
     with h5py.File(file,"r") as f:
