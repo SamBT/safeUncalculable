@@ -7,7 +7,7 @@ import awkward as ak
 import h5py
 import gc
 
-def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=None):
+def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=None,wta=False):
     print('starting?')
     pythia = pythia8.Pythia()
     assert (ptCut is None) or (type(ptCut==list) and len(ptCut) == 2 and ptCut[0] < ptCut[1])
@@ -42,6 +42,7 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=No
 
     pythia.readString("Random:setSeed = on")
     pythia.readString("Random:Seed = 0")
+    #pythia.readString("Random:Seed = 12345")
     print("done settings")
 
     pythia.init()
@@ -71,18 +72,19 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=No
         #pbar.refresh()
     finals = ak.Array(finals)
     partons = ak.Array(partons)
-
-    jetdef = fj.JetDefinition(fj.antikt_algorithm,R)
+    
+    if wta:
+        print('using wta')
+        jetdef = fj.JetDefinition(fj.antikt_algorithm,R,fj.WTA_pt_scheme)
+    else:
+        jetdef = fj.JetDefinition(fj.antikt_algorithm,R)
     cluster_f = fj.ClusterSequence(finals,jetdef)
     cluster_p = fj.ClusterSequence(partons,jetdef)
-
     jets = vector.awk(cluster_f.inclusive_jets(ptMin))
     jet_constits = vector.awk(cluster_f.constituents(min_pt=ptMin))
-
     pjets = vector.awk(cluster_p.inclusive_jets(ptMin))
     pjet_constits = vector.awk(cluster_p.constituents(min_pt=ptMin))
-
-
+        
     # sort by pT, remove any events with 0 jets
     jets_sort = ak.argsort(jets.pt,axis=1,ascending=False)
     jets = jets[jets_sort]
@@ -128,21 +130,27 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=No
     match_pjets = closest_pjets[matched_pjet_mask]
     match_pjet_constits = closest_pjet_constits[matched_pjet_mask]
     
+    # make arrays of jets from constituents (only differs when using WTA scheme for clustering)
+    lead_sumjets = vector.awk({"px":ak.sum(lead_jet_constits.px,axis=-1),"py":ak.sum(lead_jet_constits.py,axis=-1),
+                               "pz":ak.sum(lead_jet_constits.pz,axis=-1),"E":ak.sum(lead_jet_constits.E,axis=-1)})
+    match_sumpjets = vector.awk({"px":ak.sum(match_pjet_constits.px,axis=-1),"py":ak.sum(match_pjet_constits.py,axis=-1),
+                               "pz":ak.sum(match_pjet_constits.pz,axis=-1),"E":ak.sum(match_pjet_constits.E,axis=-1)})
+    
     print(f"There are {ak.count_nonzero(~matched_pjet_mask)} events where the leading had jet matches 0 parton jets")
     
     deta = lead_jet_constits.deltaeta(lead_jets)
     dphi = lead_jet_constits.deltaphi(lead_jets)
     theta = lead_jet_constits.deltaangle(lead_jets)
     dR = lead_jet_constits.deltaR(lead_jets)
-    z = lead_jet_constits.pt / lead_jets.pt
-    z_e = lead_jet_constits.E / lead_jets.E
+    z = lead_jet_constits.pt / lead_sumjets.pt
+    z_e = lead_jet_constits.E / lead_sumjets.E
 
     pdeta = match_pjet_constits.deltaeta(match_pjets)
     pdphi = match_pjet_constits.deltaphi(match_pjets)
     ptheta = match_pjet_constits.deltaangle(match_pjets)
     pdR = match_pjet_constits.deltaR(match_pjets)
-    pz = match_pjet_constits.pt / match_pjets.pt
-    pz_e = match_pjet_constits.E / match_pjets.E
+    pz = match_pjet_constits.pt / match_sumpjets.pt
+    pz_e = match_pjet_constits.E / match_sumpjets.E
     
     jmax = 150 # max number of constituents to save
     
@@ -151,12 +159,19 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=No
     # write h5
     outDir = "/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/"
     ptCutString = f"pT{ptCut[0]}to{ptCut[1]}" if ptCut is not None else "pTall"
-    outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}_{2}.h5".format(R,mH,ptCutString)
+    if wta:
+        outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}_{2}_WTA.h5".format(R,mH,ptCutString)
+    else:
+        outfile = outDir + outfile_base + "_R{0:.1f}_mH{1}_{2}.h5".format(R,mH,ptCutString)
     with h5py.File(outfile,"w") as f:
         f.create_dataset("jet1_pt",data=np.array(lead_jets.pt))
         f.create_dataset("jet1_eta",data=np.array(lead_jets.eta))
         f.create_dataset("jet1_phi",data=np.array(lead_jets.phi))
         f.create_dataset("jet1_e",data=np.array(lead_jets.e))
+        f.create_dataset("jet1_sum_pt",data=np.array(lead_sumjets.pt))
+        f.create_dataset("jet1_sum_eta",data=np.array(lead_sumjets.eta))
+        f.create_dataset("jet1_sum_phi",data=np.array(lead_sumjets.phi))
+        f.create_dataset("jet1_sum_e",data=np.array(lead_sumjets.e))
         f.create_dataset("jet1_constit_z",data=ak.fill_none(ak.pad_none(z,jmax,axis=1,clip=True),0).to_numpy())
         f.create_dataset("jet1_constit_ez",data=ak.fill_none(ak.pad_none(z_e,jmax,axis=1,clip=True),0).to_numpy())
         f.create_dataset("jet1_constit_pt",data=ak.fill_none(ak.pad_none(lead_jet_constits.pt,jmax,axis=1,clip=True),0).to_numpy())
@@ -170,6 +185,10 @@ def generate_eeH(jet_type,nEvents,outfile_base,mH=1000,R=1.0,ptMin=20.0,ptCut=No
         f.create_dataset("pjet1_eta",data=np.array(match_pjets.eta))
         f.create_dataset("pjet1_phi",data=np.array(match_pjets.phi))
         f.create_dataset("pjet1_e",data=np.array(match_pjets.e))
+        f.create_dataset("pjet1_sum_pt",data=np.array(match_sumpjets.pt))
+        f.create_dataset("pjet1_sum_eta",data=np.array(match_sumpjets.eta))
+        f.create_dataset("pjet1_sum_phi",data=np.array(match_sumpjets.phi))
+        f.create_dataset("pjet1_sum_e",data=np.array(match_sumpjets.e))
         f.create_dataset("pjet1_constit_z",data=ak.fill_none(ak.pad_none(pz,jmax,axis=1,clip=True),0).to_numpy())
         f.create_dataset("pjet1_constit_ez",data=ak.fill_none(ak.pad_none(pz_e,jmax,axis=1,clip=True),0).to_numpy())
         f.create_dataset("pjet1_constit_pt",data=ak.fill_none(ak.pad_none(match_pjet_constits.pt,jmax,axis=1,clip=True),0).to_numpy())

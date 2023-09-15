@@ -11,10 +11,15 @@ from tensorflow.keras.losses import BinaryCrossentropy
 from multiprocessing import Process
 import os
 
-def get_data(jtype,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
-    gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
-    qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
+def get_data(jtype,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/",nmax=200000,wta=False):
+    if wta:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" in f and ".h5" in f]
+    else:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" not in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" not in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
+    print("Loading:\n"+"\n".join(files))
     
     z = []
     eta = []
@@ -38,10 +43,11 @@ def get_data(jtype,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/j
     del z,eta,phi
     return output[:nmax]
 
-def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
+def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/",nmax=200000,wta=False):
     gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
     qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
+    print("Loading:\n"+"\n".join(files))
     
     output = [[] for v in vars]
     for file in files:
@@ -56,10 +62,15 @@ def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobac
         
     return output[:nmax]
 
-def get_constit_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable/",nmax=200000):
-    gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
-    qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
+def get_constit_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/",nmax=200000,wta=False):
+    if wta:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" in f and ".h5" in f]
+    else:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" not in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" not in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
+    print("Loading:\n"+"\n".join(files))
     
     output = [[] for v in vars]
     for file in files:
@@ -137,17 +148,16 @@ def train_efn(train,test,val,efn_kwargs,train_kwargs,plot=True):
     
     return efn, auc, efn_fp, efn_tp, threshs
 
-def train_pfn(file,pfn_kwargs,train_kwargs,plot=True,sd=False):
-    if sd:
-        X,Y = get_data_softDrop(file)
-    else:
-        X,Y = get_data(file)
+def train_pfn(train,test,val,efn_kwargs,train_kwargs,plot=True):
+    X_train, Y_train = train
+    X_test, Y_test = test
+    X_val, Y_val = val
 
-    (X_train, X_val, X_test, Y_train, Y_val, Y_test) = data_split(X, Y, val=0.1, test=0.15, shuffle=True)
-
-    pfn = PFN(**pfn_kwargs)
+    pfn = PFN(**efn_kwargs)
     
-    hist = pfn.fit(X_train, Y_train, validation_data=(X_val, Y_val), **train_kwargs)
+    hist = pfn.fit(X_train, Y_train,
+            validation_data=(X_val, Y_val),
+           **train_kwargs)
     
     plt.figure(figsize=(8,6))
     plt.plot(hist.history['loss'])
@@ -155,12 +165,14 @@ def train_pfn(file,pfn_kwargs,train_kwargs,plot=True,sd=False):
     plt.ylabel('loss')
     plt.xlabel('epoch')
     plt.legend(['train', 'val'], loc='upper left')
-    plt.show()
     
     preds = pfn.predict(X_test, batch_size=1000)
+    bce_loss = BinaryCrossentropy(from_logits=False)
+    test_loss = bce_loss(Y_test,preds).numpy()
+    print(f"Test Loss : {test_loss:.5f}")
     pfn_fp, pfn_tp, threshs = roc_curve(Y_test, preds[:,0])
     auc = roc_auc_score(Y_test, preds[:,0])
-    print('PFN AUC:', auc)
+    print('EFN AUC:', auc)
     if plot:
         plt.rcParams['font.family'] = 'serif'
         plt.rcParams['figure.autolayout'] = True
@@ -168,21 +180,7 @@ def train_pfn(file,pfn_kwargs,train_kwargs,plot=True,sd=False):
         plt.figure(figsize=(10,10))
         plt.plot(pfn_tp, 1-pfn_fp, '-', color='black', label='PFN')
     
-    del X, X_train, X_val, X_test, Y, Y_train, Y_val, Y_test, preds
+    del X_train,X_test,X_val,Y_train,Y_test,Y_val,preds
+    del train, test, val
     
     return pfn, auc, pfn_fp, pfn_tp, threshs
-
-def arch_scan(file,Phi_depth=3,F_depth=3):
-    phis = [20,40,60,80,100,120,140]
-    Fs = [40,60,80,100,120,140,160]
-    aucs = np.zeros((len(phis),len(Fs)))
-    for i,phi in enumerate(phis):
-        for j,f in enumerate(Fs):
-            efn, auc, fp, tp, threshs = train_efn(file,
-                                             Phi_sizes=tuple(phi for _ in range(Phi_depth)),
-                                             F_sizes=tuple(f for _ in range(F_depth)),
-                                             verbose=0,
-                                             summary=False,
-                                             plot=False)
-            aucs[i,j] = auc
-    return aucs, phis, Fs
