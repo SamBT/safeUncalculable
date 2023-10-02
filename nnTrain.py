@@ -43,9 +43,13 @@ def get_data(jtype,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/j
     del z,eta,phi
     return output[:nmax]
 
-def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/",nmax=200000,wta=False):
-    gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and ".h5" in f]
-    qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and ".h5" in f]
+def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobackup/jets-ml/datasets/safeIncalculable_v2/",nmax=200000,wta=False,sumVars=False):
+    if wta:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" in f and ".h5" in f]
+    else:
+        gjets = [base+f for f in os.listdir(base) if "h2gg_set" in f and "WTA" not in f and ".h5" in f]
+        qjets = [base+f for f in os.listdir(base) if "h2qq_set" in f and "WTA" not in f and ".h5" in f]
     files = qjets if jtype=='q' else gjets
     print("Loading:\n"+"\n".join(files))
     
@@ -54,10 +58,16 @@ def get_vars(jtype,vars,hlevel=True,efrac=False,base="/uscms/home/sbrightt/nobac
         with h5py.File(file,"r") as f:
             if hlevel:
                 for i,v in enumerate(vars):
-                    output[i].append(f[f"jet1_{v}"][()])
+                    if sumVars:
+                        output[i].append(f[f"jet1_sum_{v}"][()])
+                    else:
+                        output[i].append(f[f"jet1_{v}"][()])
             else:
                 for i,v in enumerate(vars):
-                    output[i].append(f[f"pjet1_{v}"][()])
+                    if sumVars:
+                        output[i].append(f[f"pjet1_sum_{v}"][()])
+                    else:
+                        output[i].append(f[f"pjet1_{v}"][()])
     output = np.concatenate([np.concatenate(k,axis=0).reshape(-1,1) for k in output],axis=-1)
         
     return output[:nmax]
