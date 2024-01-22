@@ -194,3 +194,44 @@ def train_pfn(train,test,val,efn_kwargs,train_kwargs,plot=True):
     del train, test, val
     
     return pfn, auc, pfn_fp, pfn_tp, threshs
+
+def train_radial_efn(train,test,val,efn_kwargs,train_kwargs,plot=True):
+    X_train, Y_train = train
+    X_test, Y_test = test
+    X_val, Y_val = val
+    
+    z_train, z_test, z_val = X_train[:,:,0], X_test[:,:,0], X_val[:,:,0]
+    p_train, p_test, p_val = X_train[:,:,1:], X_test[:,:,1:], X_val[:,:,1:]
+
+    efn = EFN(**efn_kwargs)
+    
+    hist = efn.fit([z_train, p_train], Y_train,
+            validation_data=([z_val, p_val], Y_val),
+           **train_kwargs)
+    
+    plt.figure(figsize=(8,6))
+    plt.plot(hist.history['loss'])
+    plt.plot(hist.history['val_loss'])
+    plt.ylabel('loss')
+    plt.xlabel('epoch')
+    plt.legend(['train', 'val'], loc='upper left')
+    
+    preds = efn.predict([z_test, p_test], batch_size=1000)
+    bce_loss = BinaryCrossentropy(from_logits=False)
+    test_loss = bce_loss(Y_test,preds).numpy()
+    print(f"Test Loss : {test_loss:.5f}")
+    efn_fp, efn_tp, threshs = roc_curve(Y_test, preds[:,0])
+    auc = roc_auc_score(Y_test, preds[:,0])
+    print('EFN AUC:', auc)
+    if plot:
+        plt.rcParams['font.family'] = 'serif'
+        plt.rcParams['figure.autolayout'] = True
+
+        plt.figure(figsize=(10,10))
+        plt.plot(efn_tp, 1-efn_fp, '-', color='black', label='EFN')
+    
+    del X_train,X_test,X_val,Y_train,Y_test,Y_val
+    del z_train, z_val, z_test, p_train, p_val, p_test, preds
+    del train, test, val
+    
+    return efn, auc, efn_fp, efn_tp, threshs
